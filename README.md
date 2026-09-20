@@ -41,6 +41,23 @@ The server listens on `PORT` (default 3000).
 3. Enable **Use webhook**.
 4. Under **LINE Official Account features**, turn OFF "Auto-reply messages" and "Greeting messages" if you want only the bot's OpenAI-generated replies.
 
+## FAQ from a Google Sheet (optional)
+
+The bot can look up relevant FAQ entries from a private Google Sheet and pass them to OpenAI as context before replying.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or reuse) a project and enable the **Google Sheets API**.
+2. Create a **Service Account** (IAM & Admin → Service Accounts → Create), then create a JSON key for it and download it.
+3. Open your Google Sheet, click **Share**, and add the service account's `client_email` (from the JSON key) as a **Viewer**.
+4. Set up the sheet with a tab named `FAQ` (or any name you choose) with questions in column A and answers in column B, starting from row 2 (row 1 is the header).
+5. In Railway → Variables, add:
+   - `GOOGLE_SERVICE_ACCOUNT_EMAIL` — the `client_email` from the JSON key
+   - `GOOGLE_PRIVATE_KEY` — the `private_key` from the JSON key (keep the `\n` sequences as-is; the app converts them to real newlines)
+   - `GOOGLE_SHEET_ID` — the ID from the sheet's URL (`https://docs.google.com/spreadsheets/d/<THIS_PART>/edit`)
+   - `GOOGLE_SHEET_RANGE` (optional, default `FAQ!A2:B`) — adjust if your tab/range is named differently
+6. Redeploy. The bot fetches and caches the sheet for 5 minutes, then matches the customer's message against FAQ questions and includes the closest matches as context for OpenAI.
+
+Leaving any of the three required variables blank disables the FAQ feature entirely (the bot falls back to plain OpenAI replies).
+
 ## Security notes
 
 - `.env` is git-ignored. Never commit real secrets.

@@ -8,9 +8,10 @@
   },
   "dependencies": {
     "@line/bot-sdk": "^9.4.2",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "openai": "^4.60.0",
-    "dotenv": "^16.4.5"
+    "googleapis": "^181.0.0",
+    "openai": "^4.60.0"
   },
   "engines": {
     "node": ">=18"
