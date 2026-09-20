@@ -58,6 +58,56 @@ The bot can look up relevant FAQ entries from a private Google Sheet and pass th
 
 Leaving any of the three required variables blank disables the FAQ feature entirely (the bot falls back to plain OpenAI replies).
 
+## Auto-generated purchase orders (ใบสั่งซื้อ)
+
+When an incoming message looks like an admin's order summary — one or more lines shaped like
+`<สินค้า> จำนวน <N> ลัง x <ราคา> บาท = <ยอดรวม> บาท`, optionally with `จัดส่ง <วันที่>` — the bot
+skips OpenAI entirely, parses the line items, assigns a PO number (`PO-YYYYMMDD-NNN`), and:
+
+- Replies in the chat with a formatted purchase order confirmation.
+- Appends the order to `data/orders.json` (git-ignored; local/transactional data).
+
+Example trigger message:
+
+```
+สรุปยอดนะครับ แฮปปี้ แบบขวด 900 มล. จำนวน 20 ลัง x 545 บาท = 10,900 บาท จัดส่ง 21/09/69 ครับ ขอบคุณครับ
+```
+
+A message can contain multiple item lines; they're all captured under one PO with a combined total.
+
+To download every logged order as one combined CSV file:
+
+```
+GET /orders/export.csv
+```
+
+Set `ORDERS_EXPORT_TOKEN` in your environment to require `?token=<value>` on that endpoint before
+deploying publicly — otherwise anyone with the URL can read your order history.
+
+### Customer name
+
+The bot fetches the sender's LINE display name via the Profile API and uses it as the customer
+name (falls back to blank if the lookup fails, e.g. the sender hasn't added the bot as a friend).
+
+### FORM workbook (matches the master ใบคำสั่งซื้อ-2026 sheet)
+
+Every parsed order is also appended as a new row to `data/orders-form.xlsx` (git-ignored), using
+the exact same header layout as the master order-tracking workbook — `วันที่สั่ง`, `นัดส่ง`,
+`ลูกค้า`, product-code columns (`C13`, `T18`, `H12`, `มรกต`, …), etc. — so rows can be copy/pasted
+straight into the master file. Download it anytime at:
+
+```
+GET /orders/export.xlsx
+```
+
+**Product code mapping** lives in [lib/formColumnMap.js](lib/formColumnMap.js), seeded from
+รหัสสินค้า-2026 - Test.xlsx — 15 products (C13, C18, G16, HG18, T13, T18, TG, T200, T12, H12,
+K12, H70, K80, HB90, KB12) are mapped to their quantity/price columns. A few codes that appear
+in the FORM header but have no known Thai product name yet (TN18, H18, U12, มรกต, หมูล้วน, LM13,
+LM18, P05, P14, P45, "PK G", PK200, รินทิพย์, มีสุข, มังกรทอง, Tank) are not mapped — add them the
+same way once you have their names. Until a product is mapped, its line item is written into the
+`หมายเหตุ` column instead of being lost, prefixed with `[ไม่พบรหัสสินค้า]`.
+
 ## Security notes
 
 - `.env` is git-ignored. Never commit real secrets.

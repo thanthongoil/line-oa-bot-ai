@@ -1,9 +1,13 @@
 require('dotenv').config();
 
+const fs = require('fs');
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
+const { parseOrderSummary } = require('./lib/orderParser');
+const { loadOrders, saveOrder, ordersToCsv } = require('./lib/orderStore');
+const { appendOrderRow, FORM_PATH } = require('./lib/orderForm');
 
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -105,6 +109,32 @@ app.get('/', (_req, res) => {
   res.status(200).send('LINE OpenAI chatbot is running.');
 });
 
+// Exports every parsed order as one combined CSV (ใบสั่งซื้อทั้งหมด).
+// If ORDERS_EXPORT_TOKEN is set, requires a matching ?token= query param.
+app.get('/orders/export.csv', (req, res) => {
+  const requiredToken = process.env.ORDERS_EXPORT_TOKEN;
+  if (requiredToken && req.query.token !== requiredToken) {
+    return res.status(403).send('Forbidden');
+  }
+  const orders = loadOrders();
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
+  res.status(200).send(ordersToCsv(orders));
+});
+
+// Downloads the FORM-layout workbook (same columns as the master order sheet) that
+// the bot has been appending parsed orders into. Same optional token protection.
+app.get('/orders/export.xlsx', (req, res) => {
+  const requiredToken = process.env.ORDERS_EXPORT_TOKEN;
+  if (requiredToken && req.query.token !== requiredToken) {
+    return res.status(403).send('Forbidden');
+  }
+  if (!fs.existsSync(FORM_PATH)) {
+    return res.status(404).send('No orders recorded yet.');
+  }
+  res.download(FORM_PATH, 'orders-form.xlsx');
+});
+
 // LINE's middleware verifies the X-Line-Signature header using the channel
 // secret and must receive the raw body, so it must run before any JSON parser.
 app.post('/webhook', middleware(lineConfig), async (req, res) => {
@@ -117,12 +147,87 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
   }
 });
 
+function formatThb(amount) {
+  return amount.toLocaleString('th-TH');
+}
+
+// Best-effort lookup of the sender's LINE display name to use as the customer name.
+// Falls back to null (left blank in the FORM row) if the profile can't be fetched —
+// e.g. the sender hasn't added the bot as a friend, or it's a group/room chat.
+async function getCustomerName(event) {
+  try {
+    const { type, userId } = event.source || {};
+    if (!userId) return null;
+    if (type === 'group') {
+      const profile = await lineClient.getGroupMemberProfile(event.source.groupId, userId);
+      return profile.displayName;
+    }
+    if (type === 'room') {
+      const profile = await lineClient.getRoomMemberProfile(event.source.roomId, userId);
+      return profile.displayName;
+    }
+    const profile = await lineClient.getProfile(userId);
+    return profile.displayName;
+  } catch (err) {
+    console.error('Failed to fetch LINE profile for customer name:', err);
+    return null;
+  }
+}
+
+function formatOrderReply(order) {
+  const lines = [`ใบสั่งซื้อ ${order.poNumber}`];
+  if (order.customerName) lines.push(`ลูกค้า: ${order.customerName}`);
+  lines.push('');
+  order.items.forEach((item, i) => {
+    lines.push(
+      `${i + 1}. ${item.description} จำนวน ${formatThb(item.packs)} ลัง x ${formatThb(
+        item.unitPrice
+      )} บาท = ${formatThb(item.lineTotal)} บาท`
+    );
+  });
+  lines.push('');
+  lines.push(`รวมทั้งสิ้น: ${formatThb(order.totalAmount)} บาท`);
+  if (order.deliveryDate) {
+    lines.push(`กำหนดจัดส่ง: ${order.deliveryDate}`);
+  }
+  return lines.join('\n');
+}
+
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
     return null;
   }
 
   const userText = event.message.text;
+
+  const parsedOrder = parseOrderSummary(userText);
+  if (parsedOrder) {
+    const customerName = await getCustomerName(event);
+    const order = saveOrder({
+      source: event.source?.userId || event.source?.groupId || event.source?.roomId || 'unknown',
+      customerName,
+      rawText: userText,
+      ...parsedOrder,
+    });
+
+    try {
+      await appendOrderRow({
+        orderDate: new Date(),
+        deliveryDate: order.deliveryDate,
+        customerName,
+        poNumber: order.poNumber,
+        items: order.items,
+        rawText: order.rawText,
+      });
+    } catch (err) {
+      console.error('Failed to append order to FORM workbook:', err);
+    }
+
+    return lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: formatOrderReply(order),
+    });
+  }
 
   let replyText;
   try {

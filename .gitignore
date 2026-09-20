@@ -70,6 +70,9 @@ web_modules/
 .env.*
 !.env.example
 
+# Parsed customer order log (transactional data, not source)
+data/
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
